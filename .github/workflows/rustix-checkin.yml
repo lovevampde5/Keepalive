@@ -20,7 +20,7 @@ jobs:
   rustix-alive:
     # workflow_dispatch 始终执行；repository_dispatch 仅在 DOWN（msg 含 Down/DOWN/down）时执行
     # 没有 uptime 可删除 if 条件
-    if: github.event_name != 'repository_dispatch' || contains(github.event.client_payload.msg, 'down') || contains(github.event.client_payload.msg, 'Down') || contains(github.event.client_payload.msg, 'DOWN')
+    if: github.event_name != 'repository_dispatch' || contains(github.event.client_payload.status, 'DOWN') || contains(github.event.client_payload.status, 'Down')
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
