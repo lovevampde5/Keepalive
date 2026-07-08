@@ -2,7 +2,7 @@ name: rustix-auto-alive
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */12 * * *'
   workflow_dispatch:
   # 由 Uptime Kuma Webhook 触发（服务器离线时）
   repository_dispatch:
