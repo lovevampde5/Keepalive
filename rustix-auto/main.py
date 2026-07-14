@@ -5,7 +5,7 @@ Rustix 服务器自动启动脚本
 - 支持多账号轮流操作
 - 自动登录 https://my.rustix.me/auth/login
 - 点击 Manage Server -> 判断 start 按钮状态 -> 启动服务器
-- 监听浏览器控制台 "App is running" 确认上线
+- 监听浏览器控制台 "Running Done!" 确认上线
 - 通过 stop 按钮可点击状态验证（不点击 stop）
 
 站点语言：俄语 / 英语（不支持中文）
@@ -37,10 +37,10 @@ logger = logging.getLogger("rustix-auto")
 
 LOGIN_URL = "https://my.rustix.me/auth/login"
 HOME_URL = "https://my.rustix.me"
-# 启动后等待 "App is running" 的最长时间（秒）
-START_WAIT_TIMEOUT = 180
+# 启动后等待 "Running Done!" 的最长时间（秒）
+START_WAIT_TIMEOUT = 120
 # 各步骤通用等待（ms）
-STEP_WAIT = 2500
+STEP_WAIT = 3000
 # 登录页 SPA 渐进渲染等待（ms）
 LOGIN_PAGE_WAIT = 6000
 
@@ -305,16 +305,16 @@ def start_server(page: Page, console_lines: list) -> str:
     except Exception:
         start_btn.first.click(force=True)
 
-    # 等待控制台输出 "App is running"
-    logger.info(f"等待控制台输出 'App is running'（最长 {START_WAIT_TIMEOUT}s）")
+    # 等待控制台输出 "Running Done!"
+    logger.info(f"等待控制台输出 'Running Done!'（最长 {START_WAIT_TIMEOUT}s）")
     deadline = time.time() + START_WAIT_TIMEOUT
     detected = False
     while time.time() < deadline:
-        if any("App is running" in line for line in console_lines):
+        if any("Running Done!" in line for line in console_lines):
             detected = True
             break
         try:
-            if page.locator(":text('App is running')").count() > 0:
+            if page.locator(":text('Running Done!')").count() > 0:
                 detected = True
                 break
         except Exception:
@@ -322,9 +322,9 @@ def start_server(page: Page, console_lines: list) -> str:
         page.wait_for_timeout(2000)
 
     if detected:
-        logger.info("已检测到 'App is running'，服务器上线中")
+        logger.info("已检测到 'Running Done!'，服务器上线中")
     else:
-        logger.warning("等待超时，未检测到 'App is running'，继续验证 stop 状态")
+        logger.warning("等待超时，未检测到 'Running Done!'，继续验证 stop 状态")
 
     # 通过 stop 按钮状态验证（不点击 stop）
     page.wait_for_timeout(STEP_WAIT)

@@ -1,0 +1,57 @@
+name: IAMHC AI 每日签到
+
+on:
+  schedule:
+    - cron: "10 16 * * *"
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./iamhc
+    permissions:
+      contents: read
+    
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v5
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: 📦 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: ✅ 执行签到
+        id: checkin
+        env:
+          IAMHC_BASE_URL: ${{ vars.IAMHC_BASE_URL }}
+          IAMHC_USER_ID: ${{ vars.IAMHC_USER_ID }}
+          IAMHC_USERNAME: ${{ vars.IAMHC_USERNAME }}
+          IAMHC_PASSWORD: ${{ vars.IAMHC_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          IAMHC_SESSION_COOKIE: ${{ vars.IAMHC_SESSION_COOKIE }}
+        run: python checkin.py
+
+      - name: 💾 将 session 写回 GitHub Actions Variables
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          if [ -f session.cookie.b64 ]; then
+            SESSION_VALUE=$(cat session.cookie.b64)
+            echo "写入 session 到 IAMHC_SESSION_COOKIE 变量..."
+            gh variable set IAMHC_SESSION_COOKIE \
+              --body "$SESSION_VALUE" \
+              --repo ${{ github.repository }}
+            echo "✅ 写入成功"
+            rm -f session.cookie.b64
+          else
+            echo "⏭️ 无 session.b64 文件，跳过写入"
+          fi

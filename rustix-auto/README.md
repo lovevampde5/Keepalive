@@ -1,6 +1,6 @@
 # Rustix 服务器自动启动
 
-自动登录 [my.rustix.me](https://my.rustix.me)，进入 Manage Server，检测并启动服务器，通过浏览器控制台 `App is running` 与 stop 按钮状态确认上线。支持多账号轮流操作。
+自动登录 [my.rustix.me](https://my.rustix.me)，进入 Manage Server，检测并启动服务器，通过浏览器控制台 `Running Done!` 与 stop 按钮状态确认上线。支持多账号轮流操作。
 
 ## 功能
 
@@ -8,7 +8,7 @@
 - 自动登录 → 点击 `Manage Server` → 判断 `start` 按钮是否可点击
   - `start` 可点击 → 服务器离线，点击启动
   - `start` 不可点击 → 服务器已在线，跳过
-- 监听浏览器控制台输出 `App is running` 确认上线
+- 监听浏览器控制台输出 `Running Done!` 确认上线
 - 通过 `stop` 按钮可点击状态验证（**不点击 stop**）
 - 完整日志输出 + 文件日志 `run.log`
 - 支持 GitHub Actions 自动运行：手动触发 / 定时器 / Uptime Kuma 故障触发
