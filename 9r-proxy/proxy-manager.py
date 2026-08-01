@@ -28,7 +28,7 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
-BASE_URL = os.getenv("9R_BASE_URL") or "https://9rou.argo.indevs.in"
+BASE_URL = os.getenv("R9_BASE_URL") or "https://9rou.argo.indevs.in"
 PASSWORD = os.getenv("R9_PASSWORD") or ""
 COOKIE_B64 = os.getenv("R9_COOKIE") or ""
 COOKIE_FILE = "cookies.txt"          # 登录 cookie 持久化（供 CI 写回）

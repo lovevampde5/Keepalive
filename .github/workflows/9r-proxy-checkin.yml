@@ -39,6 +39,7 @@ jobs:
       - name: 🔄 同步 9router 代理池
         id: sync
         env:
+          R9_BASE_URL: ${{ vars.R9_BASE_URL }}
           R9_PASSWORD: ${{ secrets.R9_PASSWORD }}
           R9_COOKIE: ${{ vars.R9_COOKIE }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
