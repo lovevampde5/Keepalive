@@ -1,0 +1,35 @@
+name: 肖恩AI 每日签到
+
+on:
+  schedule:
+    - cron: "5 16 * * *" # 北京时间 00:05
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./xiaoenai-checkin
+    permissions:
+      contents: read
+
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 📦 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: ✅ 执行签到
+        env:
+          XIAOENAI_ACCOUNTS: ${{ vars.XIAOENAI_ACCOUNTS }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python checkin.py
