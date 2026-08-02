@@ -67,10 +67,10 @@ def send_tg_notification(data: dict) -> bool:
 
     lines = [
         "<b>肖恩AI 签到通知</b>",
-        "----------------",
+        "--------------------",
         f"📅 <b>日期</b>：{date}",
         f"📊 <b>结果</b>：成功 {ok_count} / 总计 {len(results)}",
-        "----------------",
+        "--------------------",
     ]
     lines.extend(_format_account(r) for r in results)
 
