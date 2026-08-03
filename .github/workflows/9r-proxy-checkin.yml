@@ -41,25 +41,9 @@ jobs:
         env:
           R9_BASE_URL: ${{ vars.R9_BASE_URL }}
           R9_PASSWORD: ${{ secrets.R9_PASSWORD }}
-          R9_COOKIE: ${{ vars.R9_COOKIE }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python proxy-manager.py
-
-      - name: 💾 写回 cookie 到 GitHub Variables
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          if [ -f cookies.txt ]; then
-            COOKIE_VALUE=$(cat cookies.txt)
-            echo "写入 cookie 到 R9_COOKIE 变量..."
-            gh variable set R9_COOKIE --body "$COOKIE_VALUE" --repo ${{ github.repository }}
-            echo "✅ 写入成功"
-            rm -f cookies.txt
-          else
-            echo "⏭️ 无 cookies.txt 文件，跳过写入"
-          fi
 
       - name: 📄 提交 socks5-otc.txt
         if: always()

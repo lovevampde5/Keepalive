@@ -3,17 +3,19 @@
 9router 代理池同步脚本（GitHub Actions 专用）
 
 读取 socks5.txt（tg-fetch.py 产物），同步到 9router：
-1. Cookie 管理：优先复用 R9_COOKIE，失效则用 R9_PASSWORD 重新登录
+1. 用 R9_PASSWORD 登录，获取 auth_token（每次运行都重新登录，不复用 cookie）
 2. 获取现有代理池，以 ip:port（name）为去重键
 3. 只增不减：新增 socks5.txt 中不存在的节点
 4. 全局测试连通性，删除测试失败的节点
 5. 输出最终可用节点到 socks5-otc.txt（覆盖写）
-6. 输出新的 cookie b64（供 CI 写回 R9_COOKIE）
-7. 发送 TG 通知汇总
+6. 发送 TG 通知汇总
+
+安全机制：若"不通"比例超过 DEAD_RATIO_LIMIT（默认 90%），判定为系统性异常
+（鉴权失效 / 服务故障 / 限流），跳过删除并退出，避免误清空整个代理池。
 
 需要的配置（环境变量）：
+  R9_BASE_URL    设为 9router 首页地址
   R9_PASSWORD    9router API 登录密码
-  R9_COOKIE      9router session cookie（base64 JSON）
   TG_BOT_TOKEN   TG 通知机器人 Token
   TG_CHAT_ID     TG 通知接收 Chat ID
 """
@@ -21,8 +23,6 @@
 import os
 import re
 import sys
-import json
-import base64
 import logging
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -30,18 +30,17 @@ import requests
 
 BASE_URL = os.getenv("R9_BASE_URL") or "https://9rou.argo.indevs.in"
 PASSWORD = os.getenv("R9_PASSWORD") or ""
-COOKIE_B64 = os.getenv("R9_COOKIE") or ""
-COOKIE_FILE = "cookies.txt"          # 登录 cookie 持久化（供 CI 写回）
 OUTPUT_FILE = "socks5-otc.txt"       # 最终可用节点输出
 NODES_FILE = "socks5.txt"            # tg-fetch.py 产物
-TYPE_ALLOWED = {"socks5", "http", "https"}  # 只处理这些类型
+TYPE_ALLOWED = {"socks5", "http"}    # 只处理这些类型
 
 # 并行测试配置
 TEST_CONCURRENCY = int(os.getenv("TEST_CONCURRENCY") or "8")  # 并行线程数
 TEST_TIMEOUT = int(os.getenv("TEST_TIMEOUT") or "15")         # 单次测试超时（秒），超时判定为不通
+DEAD_RATIO_LIMIT = float(os.getenv("DEAD_RATIO_LIMIT") or "0.9")  # 系统异常保护：不通比例超过此阈值（0~1）时，判定为系统性异常，跳过删除
 
 # 解析节点 URL: scheme://user:pass@ip:port
-NODE_RE = re.compile(r"(socks5|http|https)://[^\s#@]+@(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)")
+NODE_RE = re.compile(r"(socks5|http)://[^\s#@]+@(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,52 +50,11 @@ logging.basicConfig(
 log = logging.getLogger("proxy-manager")
 
 
-# ================= Cookie 管理 =================
+# ================= Session 管理 =================
 
-def cookie_b64_to_jar(b64: str) -> list:
-    """从 base64 JSON 还原 requests cookie 列表（name/value/domain/path）"""
-    try:
-        raw = base64.b64decode(b64).decode("utf-8")
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            # 兼容旧的扁平 dict 格式 {name: value}
-            return [{"name": k, "value": v, "domain": "", "path": "/"} for k, v in data.items()]
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-
-def cookie_jar_to_b64(cookies: list) -> str:
-    """将 cookie 列表编码为 base64 JSON（供写回 GitHub Variables）"""
-    return base64.b64encode(json.dumps(cookies).encode("utf-8")).decode("utf-8")
-
-
-def load_cookie_jar() -> list:
-    """读取 R9_COOKIE，优先环境变量，其次 cookies.txt"""
-    if COOKIE_B64:
-        return cookie_b64_to_jar(COOKIE_B64)
-    if os.path.exists(COOKIE_FILE):
-        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
-            return cookie_b64_to_jar(f.read().strip())
-    return []
-
-
-def save_cookie_jar(cookies: list):
-    """写入 cookies.txt（供 CI 写回 R9_COOKIE）"""
-    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-        f.write(cookie_jar_to_b64(cookies))
-
-
-def make_session(cookies: list) -> requests.Session:
-    """构建带 cookie 的 requests.Session"""
+def make_session() -> requests.Session:
+    """构建标准 requests.Session（无预置 cookie，登录后自动携带 auth_token）"""
     s = requests.Session()
-    for c in cookies:
-        s.cookies.set(
-            c.get("name"), c.get("value"),
-            domain=c.get("domain") or "",
-            path=c.get("path") or "/",
-            secure=c.get("secure") or False,
-        )
     s.headers.update({"Content-Type": "application/json"})
     return s
 
@@ -156,11 +114,20 @@ def api_add_pool(session: requests.Session, name: str, proxy_url: str) -> bool:
         return False
 
 
-def api_test_pool(session: requests.Session, pool_id, timeout: int = TEST_TIMEOUT) -> bool:
-    """测试代理池连通性，返回是否通过（真实响应: {"ok": bool, "error": str}）
-    timeout 为单次请求超时（秒），超过则判定为不通"""
+def api_test_pool(session: requests.Session, pool_id, timeout: int = TEST_TIMEOUT):
+    """测试代理池连通性（真实响应: {"ok": bool, "error": str}）
+
+    返回三态：
+      True  - 连通
+      False - 不通（含请求超时）
+      None  - 系统性异常（鉴权失效 / 服务端 5xx / 限流），不可判定为不通
+      timeout 为单次请求超时（秒）"""
     try:
         resp = session.post(f"{BASE_URL}/api/proxy-pools/{pool_id}/test", timeout=timeout)
+        if resp.status_code in (401, 403, 429) or resp.status_code >= 500:
+            log.error("测试代理池 %s 返回 HTTP %s（系统性异常，不判定为不通）: %s",
+                      pool_id, resp.status_code, resp.text[:120])
+            return None
         data = resp.json()
         return bool(data.get("ok"))
     except (requests.RequestException, ValueError) as e:
@@ -191,7 +158,7 @@ def parse_node(url: str) -> tuple:
 
 
 def is_type_allowed(pool_type: str) -> bool:
-    """判断代理池类型是否属于处理范围（socks5/http/https）"""
+    """判断代理池类型是否属于处理范围（socks5/http）"""
     return (pool_type or "").lower() in TYPE_ALLOWED
 
 
@@ -229,22 +196,19 @@ def main():
     log.info("9router 代理池同步启动")
     log.info("目标服务: %s", BASE_URL)
 
-    stats = {"fetched": 0, "added": 0, "deleted": 0, "total": 0, "fail_added": 0}
+    stats = {"fetched": 0, "added": 0, "deleted": 0, "total": 0, "fail_added": 0, "anomaly": False}
 
     # 1. 读取 TG 节点
     new_nodes = read_nodes_file()
     stats["fetched"] = len(new_nodes)
     log.info("读取 %s: %d 个节点", NODES_FILE, len(new_nodes))
 
-    # 2. Cookie 管理 + 登录
-    session = make_session(load_cookie_jar())
-    pools = api_get_pools(session)
-    if not pools and not api_login(session):
+    # 2. 登录（每次运行都重新登录，不复用 cookie）
+    session = make_session()
+    if not api_login(session):
         log.error("登录 9router 失败，退出")
         sys.exit(1)
-    # 重新获取代理池（登录后）
-    if not pools:
-        pools = api_get_pools(session)
+    pools = api_get_pools(session)
 
     # 3. 构建现有池 {name(ip:port): {id, proxyUrl, type, ...}}，只保留允许类型
     existing = {}
@@ -283,12 +247,14 @@ def main():
 
     live_pools = []
     dead_pools = []
-    # 每个线程用独立 Session + 自己的 cookie，避免 requests.Session 线程不安全
-    cookie_list_shared = load_cookie_jar()
+    error_pools = []
+    # 每个线程用独立 Session，复用主 session 登录后的 cookie（requests.Session 非线程安全）
+    auth_cookies = requests.utils.dict_from_cookiejar(session.cookies)
 
     def test_one(args):
         pool_id, name, p = args
-        s = make_session(cookie_list_shared)
+        s = make_session()
+        s.cookies.update(auth_cookies)
         ok = api_test_pool(s, pool_id, timeout=TEST_TIMEOUT)
         return pool_id, name, p, ok
 
@@ -296,10 +262,33 @@ def main():
         futures = [ex.submit(test_one, c) for c in candidates]
         for fut in as_completed(futures):
             pool_id, name, p, ok = fut.result()
-            if ok:
+            if ok is True:
                 live_pools.append(p)
+            elif ok is None:
+                error_pools.append((pool_id, name))
             else:
                 dead_pools.append((pool_id, name))
+
+    # 安全机制：不通比例超过阈值时，判定为系统性异常，跳过删除
+    tested = len(candidates)
+    dead_ratio = (len(dead_pools) + len(error_pools)) / tested if tested else 0.0
+    if error_pools:
+        log.error("有 %d 个节点返回系统性异常（鉴权/服务端错误），不计入不通", len(error_pools))
+    if tested and dead_ratio > DEAD_RATIO_LIMIT:
+        log.error("=" * 48)
+        log.error("检测到系统性异常：不通比例 %.1f%%（%d/%d）超过阈值 %.0f%%",
+                  dead_ratio * 100, len(dead_pools) + len(error_pools), tested,
+                  DEAD_RATIO_LIMIT * 100)
+        log.error("疑似鉴权失效 / 服务故障 / 限流，跳过删除以避免误清空代理池")
+        log.error("=" * 48)
+        stats["anomaly"] = True
+        # 异常时不删除、不覆盖 socks5-otc.txt，直接通知后退出
+        stats["total"] = len(live_pools)
+        try:
+            send_tg_notification(stats)
+        except Exception as e:
+            log.error("发送 TG 通知异常: %s", e)
+        sys.exit(1)
 
     # 删除测试不通的节点（串行，DELETE 很快）
     for pool_id, name in dead_pools:
@@ -309,7 +298,9 @@ def main():
         else:
             log.error("删除节点 %s 失败", name)
 
-    log.info("测试完成: 存活 %d, 删除 %d", len(live_pools), len(dead_pools))
+    # 系统性异常的节点保留（不删除），但也不写入输出文件
+    log.info("测试完成: 存活 %d, 删除 %d, 异常保留 %d",
+             len(live_pools), len(dead_pools), len(error_pools))
 
     # 6. 输出最终可用节点到 socks5-otc.txt（覆盖写）
     stats["total"] = len(live_pools)
@@ -318,19 +309,7 @@ def main():
             f.write(p.get("proxyUrl", "") + "\n")
     log.info("最终可用节点 %d 个，已写入 %s", stats["total"], OUTPUT_FILE)
 
-    # 7. 保存 cookie 供 CI 写回 R9_COOKIE（保留 domain/path/secure）
-    cookie_list = [
-        {"name": c.name, "value": c.value, "domain": c.domain,
-         "path": c.path, "secure": c.secure}
-        for c in session.cookies
-    ]
-    if cookie_list:
-        save_cookie_jar(cookie_list)
-        log.info("cookie 已写入 %s（供 CI 写回 R9_COOKIE）", COOKIE_FILE)
-    else:
-        log.warning("未获取到 cookie，跳过持久化")
-
-    # 8. 发送 TG 通知
+    # 7. 发送 TG 通知
     try:
         send_tg_notification(stats)
     except Exception as e:
@@ -351,16 +330,28 @@ def send_tg_notification(stats: dict):
 
     bjt = datetime.now(timezone(timedelta(hours=8)))
     date_str = f"{bjt.year}年{bjt.month:02d}月{bjt.day:02d}日"
-    message = (
-        f"🎉 <b>9Router 代理池更新</b>\n"
-        f"----------------\n"
-        f"📅 <b>日期</b>：{date_str}\n"
-        f"📥 <b>TG 抓取</b>：{stats['fetched']} 个节点\n"
-        f"➕ <b>新增</b>：{stats['added']} 个\n"
-        f"❌ <b>删除</b>：{stats['deleted']} 个（测试不通）\n"
-        f"✅ <b>最终可用</b>：{stats['total']} 个\n"
-        f"📄 <b>socks5-otc.txt</b> 已更新"
-    )
+
+    if stats.get("anomaly"):
+        message = (
+            f"⚠️ <b>9Router 代理池异常保护</b>\n"
+            f"----------------\n"
+            f"📅 <b>日期</b>：{date_str}\n"
+            f"📥 <b>TG 抓取</b>：{stats['fetched']} 个节点\n"
+            f"🚫 <b>检测到系统性异常</b>：不通比例超过 90%\n"
+            f"🛡️ <b>已跳过删除</b>，代理池保持原状\n"
+            f"📄 <b>socks5-otc.txt</b> 未更新"
+        )
+    else:
+        message = (
+            f"🎉 <b>9Router 代理池更新</b>\n"
+            f"----------------\n"
+            f"📅 <b>日期</b>：{date_str}\n"
+            f"📥 <b>TG 抓取</b>：{stats['fetched']} 个节点\n"
+            f"➕ <b>新增</b>：{stats['added']} 个\n"
+            f"❌ <b>删除</b>：{stats['deleted']} 个（测试不通）\n"
+            f"✅ <b>最终可用</b>：{stats['total']} 个\n"
+            f"📄 <b>socks5-otc.txt</b> 已更新"
+        )
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
