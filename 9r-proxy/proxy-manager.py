@@ -36,7 +36,7 @@ TYPE_ALLOWED = {"socks5", "http"}    # 只处理这些类型
 
 # 并行测试配置
 TEST_CONCURRENCY = int(os.getenv("TEST_CONCURRENCY") or "8")  # 并行线程数
-TEST_TIMEOUT = int(os.getenv("TEST_TIMEOUT") or "15")         # 单次测试超时（秒），超时判定为不通
+TEST_TIMEOUT = int(os.getenv("TEST_TIMEOUT") or "10")         # 单次测试超时（秒），超时判定为不通
 DEAD_RATIO_LIMIT = float(os.getenv("DEAD_RATIO_LIMIT") or "0.9")  # 系统异常保护：不通比例超过此阈值（0~1）时，判定为系统性异常，跳过删除
 
 # 解析节点 URL: scheme://user:pass@ip:port
