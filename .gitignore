@@ -1,9 +1,8 @@
-node_modules/*
-*pycache*/*
-docs/*
-.zcode/*
+node_modules/
+docs/
+.zcode/
 9r-proxy/socks5.txt
-.superpowers/*
-tests/*
+.superpowers/
+tests/
 *.pyc
 __pycache__/
