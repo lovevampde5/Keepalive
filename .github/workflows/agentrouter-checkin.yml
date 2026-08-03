@@ -31,6 +31,7 @@ jobs:
           AGENTROUTER_BASE_URL: ${{ vars.AGENTROUTER_BASE_URL }}
           AGENTROUTER_USERNAME: ${{ vars.AGENTROUTER_USERNAME }}
           AGENTROUTER_PASSWORD: ${{ vars.AGENTROUTER_PASSWORD }}
+          AGENTROUTER_ACCOUNTS: ${{ vars.AGENTROUTER_ACCOUNTS }}
           SOCKS5_PROXY: ${{ vars.SOCKS5_PROXY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
