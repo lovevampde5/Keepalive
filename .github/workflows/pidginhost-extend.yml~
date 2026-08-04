@@ -1,0 +1,40 @@
+name: PidginHost 免费服务器续期
+
+on:
+  schedule:
+    # 每月 1 号、15 号早上 8 点执行（免费服务器 30 天到期，提前续期）
+    - cron: '0 8 1,15 * *'
+  workflow_dispatch:  # 可手动触发
+
+jobs:
+  extend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install -r pidginhost-extend/requirements.txt
+          playwright install chromium
+
+      - name: 恢复 session 文件
+        env:
+          PIDGINHOST_SESSION_JSON: ${{ secrets.PIDGINHOST_SESSION }}
+        run: |
+          # 将 GitHub Secret 中的 session 数据写入文件
+          echo "$PIDGINHOST_SESSION_JSON" > pidginhost-extend/session.json
+          echo "✅ session.json 已恢复 ($(wc -c < pidginhost-extend/session.json) bytes)"
+
+      - name: 执行续期
+        env:
+          PIDGINHOST_SERVER_ID: ${{ secrets.PIDGINHOST_SERVER_ID || '4155' }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          cd pidginhost-extend
+          python pidginhost_extend.py --extend
