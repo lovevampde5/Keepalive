@@ -30,8 +30,8 @@ def send_combined_notification(notify_data: dict) -> bool:
                 "success":      bool,  # True=成功, False=失败
                 "new_signin":   bool,  # True=本次新签到, False=今日已签到
                 "status":       str,   # 状态描述
-                "quota":        int,   # 当前额度
-                "balance_usd":  float, # 当前余额美元
+                "quota":         int,   # 当前额度
+                "balance_coins": float, # 当前余额硬币
             },
             ...
         ]
@@ -45,7 +45,7 @@ def send_combined_notification(notify_data: dict) -> bool:
 
     results = notify_data.get("results", [])
     date = escape(notify_data.get("date", ""))
-    total_balance = sum(r.get("balance_usd", 0.0) for r in results if r.get("success"))
+    total_balance = sum(r.get("balance_coins", 0.0) for r in results if r.get("success"))
 
     lines = [
         "<b>API456 签到通知</b>",
@@ -60,11 +60,11 @@ def send_combined_notification(notify_data: dict) -> bool:
         if not r.get("success"):
             lines.append(f"     ❌ 签到失败：{escape(str(r.get('status', '')))}")
         elif r.get("new_signin"):
-            lines.append(f"     🎉 签到成功，余额 ${r.get('balance_usd', 0.0):,.2f}")
+            lines.append(f"     🎉 签到成功，余额 {r.get('balance_coins', 0.0):,.2f} 硬币")
         else:
-            lines.append(f"     ✅ 今日已签到，余额 ${r.get('balance_usd', 0.0):,.2f}")
+            lines.append(f"     ✅ 今日已签到，余额 {r.get('balance_coins', 0.0):,.2f} 硬币")
     lines.append("----------------")
-    lines.append(f"💰 <b>总余额</b>：${total_balance:,.2f}")
+    lines.append(f"💰 <b>总余额</b>：{total_balance:,.2f} 硬币")
     message = "\n".join(lines)
 
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"

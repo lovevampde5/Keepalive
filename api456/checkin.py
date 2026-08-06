@@ -185,7 +185,7 @@ def process_account(username: str, password: str) -> dict:
         "new_signin": False,
         "status": "",
         "quota": 0,
-        "balance_usd": 0.0,
+        "balance_coins": 0.0,
     }
 
     session = create_session()
@@ -205,9 +205,9 @@ def process_account(username: str, password: str) -> dict:
         result["success"] = True
         result["username"] = mask(info.get("username") or username)
         result["quota"] = info.get("quota", 0)
-        # New-API 标准：1 USD = 500000 quota
-        result["balance_usd"] = round((result["quota"] or 0) / 500000, 2)
-        log.info("当前余额: $%.2f（%d 硬币）", result["balance_usd"], result["quota"])
+        # api456.me 换算：1 硬币 = 50000 quota
+        result["balance_coins"] = round((result["quota"] or 0) / 50000, 2)
+        log.info("当前余额: %.2f 硬币（%d quota）", result["balance_coins"], result["quota"])
     else:
         result["status"] += "（额度查询失败）"
 

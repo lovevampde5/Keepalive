@@ -2,7 +2,7 @@ name: AgentRouter 每日签到
 
 on:
   schedule:
-    - cron: "15 2 * * *"
+    - cron: "25 16 * * *"
   workflow_dispatch:
 
 jobs:
