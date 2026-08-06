@@ -15,25 +15,30 @@ import re
 import sys
 import logging
 from datetime import datetime, timezone, timedelta
-
 import requests
 
 # ---------------------------------------------------------------------------
-# 配置
+# 日志（北京时间）
 # ---------------------------------------------------------------------------
 BASE_URL = os.getenv("XIAOENAI_BASE_URL") or "https://free.supxh.xin"
 ACCOUNTS_ENV = os.getenv("XIAOENAI_ACCOUNTS") or ""
-
-# 北京时间时区
 BJT = timezone(timedelta(hours=8))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("checkin")
+# 北京时间时区
+class BJTFormatter(logging.Formatter):
+    """日志时间固定为北京时间（UTC+8）"""
+    def converter(self, secs):
+        return time.gmtime(secs + 8 * 3600)
 
+log = logging.getLogger("checkin")
+log.setLevel(logging.INFO)
+log.propagate = False
+_handler = logging.StreamHandler()
+_handler.setFormatter(BJTFormatter(
+    fmt="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+))
+log.addHandler(_handler)
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -45,12 +50,10 @@ def mask(name: str) -> str:
         return "*****"
     return (name[:4] + "*****") if len(name) > 4 else (name + "*****")
 
-
 def bjt_date_str() -> str:
     """北京时间日期字符串，如 '2026年08月02日'"""
     now = datetime.now(BJT)
     return f"{now.year}年{now.month:02d}月{now.day:02d}日"
-
 
 def parse_accounts(raw: str) -> list:
     """解析多账号配置（换行或逗号分隔），返回 [(username, password), ...]"""
@@ -71,7 +74,6 @@ def parse_accounts(raw: str) -> list:
         accounts.append((username, password))
     return accounts
 
-
 def get_json(resp: requests.Response):
     """解析 JSON；非 JSON 响应（如 Next.js 404 页面）返回 None"""
     try:
@@ -79,7 +81,6 @@ def get_json(resp: requests.Response):
     except ValueError:
         log.warning("响应非 JSON（HTTP %s），可能接口路径已变更", resp.status_code)
         return None
-
 
 # ---------------------------------------------------------------------------
 # 会话与 API
@@ -99,7 +100,6 @@ def create_session() -> requests.Session:
     })
     return s
 
-
 def do_login(session: requests.Session, username: str, password: str) -> bool:
     """登录，成功后 auth_token Cookie 自动存入 session"""
     payload = {"username": username, "password": password}
@@ -115,7 +115,6 @@ def do_login(session: requests.Session, username: str, password: str) -> bool:
     except requests.RequestException as e:
         log.error("登录请求异常: %s", e)
         return False
-
 
 def do_signin(session: requests.Session) -> tuple:
     """
@@ -140,7 +139,6 @@ def do_signin(session: requests.Session) -> tuple:
         log.error("签到请求异常: %s", e)
         return False, "签到请求异常"
 
-
 def get_user_info(session: requests.Session) -> dict:
     """获取用户信息（含 quota / permanentQuota / dailyQuota / isVip）"""
     try:
@@ -152,7 +150,6 @@ def get_user_info(session: requests.Session) -> dict:
     except requests.RequestException as e:
         log.error("获取用户信息异常: %s", e)
     return {}
-
 
 # ---------------------------------------------------------------------------
 # 单账号流程
@@ -200,7 +197,6 @@ def process_account(username: str, password: str) -> dict:
              f"{result['daily_quota']:,}")
     return result
 
-
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -245,7 +241,6 @@ def main():
     # 有任一账号失败时以非零码退出，便于 Actions 标红告警
     if ok_count < len(results):
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

@@ -30,7 +30,6 @@ jobs:
         env:
           API456_ACCOUNTS: ${{ vars.API456_ACCOUNTS }}
           API456_BASE_URL: ${{ vars.API456_BASE_URL }}
-          SOCKS5_PROXY: ${{ vars.SOCKS5_PROXY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python checkin.py

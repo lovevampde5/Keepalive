@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 """
 API456 每日签到脚本（GitHub Actions 专用）
+使用 Cookie 认证，每次运行重新登录，支持多账号。
 
 需要的配置（环境变量）：
-API456_ACCOUNTS    多账号登录，格式 user1:pass1,user2:pass2
-                   支持换行或逗号分隔，每行一个 user:pass
-                   单账号时只需写一行即可
-API456_BASE_URL    API456 站地址（可选，默认 https://api456.me）
-SOCKS5_PROXY       代理，可多个（换行或逗号分隔），如
-                   socks5://user:pass@host:port
-TG_BOT_TOKEN       Telegram Bot Token（可选）
-TG_CHAT_ID         Telegram Chat ID（可选）
-
-模式判定：
-只要 API456_ACCOUNTS 存在且解析后不为空，即进入签到流程。
-单行 user:pass 即为单账号，多行即多账号，统一处理。
-
-New-API 配额 美元换算：1 USD = 500000 quota
+  API456_ACCOUNTS    多账号凭证，每行一个 user:pass
+                       也支持逗号分隔或单行 user:pass
+  API456_BASE_URL    API456 站地址（可选，默认 https://api456.me）
+  TG_BOT_TOKEN       Telegram Bot Token（可选，为空则跳过通知）
+  TG_CHAT_ID         接收通知的 Chat ID（可选）
 """
 
 import os
@@ -25,17 +17,14 @@ import sys
 import time
 import json
 import logging
-import requests
 from datetime import datetime, timezone, timedelta
+import requests
 
 # ---------------------------------------------------------------------------
-# 配置（全部从环境变量读取）
+# 配置
 # ---------------------------------------------------------------------------
 BASE_URL = os.getenv("API456_BASE_URL") or "https://api456.me"
 ACCOUNTS = os.getenv("API456_ACCOUNTS") or ""
-PROXY_ENV = os.getenv("SOCKS5_PROXY") or ""
-
-QUOTA_PER_UNIT = 500000  # New-API 配额转 USD
 BJT = timezone(timedelta(hours=8))
 
 # ---------------------------------------------------------------------------
@@ -60,61 +49,48 @@ log.addHandler(_handler)
 # 工具函数
 # ---------------------------------------------------------------------------
 def mask(name: str) -> str:
-    """用户名脱敏：显示前 4 位，其余用 ***** 代替"""
+    """用户名脱敏：显示前 4 位 + *****"""
     if not name:
         return "*****"
-    if len(name) <= 4:
-        return name[0] + "****"
-    return name[:4] + "*****"
+    return (name[:4] + "*****") if len(name) > 4 else (name + "*****")
 
 def bjt_date_str() -> str:
     """北京时间日期字符串，如 '2026年08月06日'"""
     now = datetime.now(BJT)
     return f"{now.year}年{now.month:02d}月{now.day:02d}日"
 
-def parse_proxies(raw: str) -> list:
-    """解析代理配置（换行或逗号分隔），socks/socks5 统一转 socks5h"""
-    proxies = []
-    for item in re.split(r"[\n,]+", raw):
-        url = item.strip()
-        if not url:
-            continue
-        if url.startswith("socks5://"):
-            url = "socks5h://" + url[len("socks5://"):]
-        elif url.startswith("socks://"):
-            url = "socks5h://" + url[len("socks://"):]
-        proxies.append(url)
-    return proxies
-
 def parse_accounts(raw: str) -> list:
-    """解析账号配置，支持逗号分隔和换行分隔，格式 user:pass"""
+    """解析多账号配置（换行或逗号分隔），返回 [(username, password), ...]"""
     accounts = []
     for item in re.split(r"[\n,]+", raw):
-        item = item.strip()
-        if not item or ":" not in item:
+        line = item.strip()
+        if not line:
             continue
-        user, _, passwd = item.partition(":")
-        accounts.append((user.strip(), passwd.strip()))
+        if ":" not in line:
+            log.warning("忽略格式错误的账号配置（缺少冒号）: %s", mask(line))
+            continue
+        # 密码中可能含冒号，只按第一个冒号切分
+        username, password = line.split(":", 1)
+        username, password = username.strip(), password.strip()
+        if not username or not password:
+            log.warning("忽略不完整的账号配置: %s", mask(line))
+            continue
+        accounts.append((username, password))
     return accounts
 
 def get_json(resp: requests.Response):
-    """解析 JSON；被 WAF 拦截或非 JSON 时返回 None"""
+    """解析 JSON；非 JSON 响应返回 None"""
     try:
         return resp.json()
-    except (json.JSONDecodeError, ValueError):
-        if "aliyun_waf" in resp.text.lower() or "waf" in resp.text.lower():
-            log.warning("响应被 WAF 拦截（当前 IP/代理不可用）")
+    except (ValueError, json.JSONDecodeError):
+        log.warning("响应非 JSON（HTTP %s），可能接口路径已变更", resp.status_code)
         return None
-
-def quota_to_usd(quota: int) -> float:
-    """配额转换为美元"""
-    return round((quota or 0) / QUOTA_PER_UNIT, 2)
 
 # ---------------------------------------------------------------------------
 # 会话与 API
 # ---------------------------------------------------------------------------
-def create_session(proxy_url: str = "") -> requests.Session:
-    """创建仿浏览器 Session（可选代理）"""
+def create_session() -> requests.Session:
+    """创建仿浏览器 Session"""
     s = requests.Session()
     s.headers.update({
         "User-Agent": (
@@ -127,101 +103,104 @@ def create_session(proxy_url: str = "") -> requests.Session:
         "Referer": f"{BASE_URL}/login",
         "Origin": BASE_URL,
     })
-    if proxy_url:
-        s.proxies.update({"http": proxy_url, "https": proxy_url})
     return s
 
-def find_working_proxy() -> str:
-    """逐个尝试代理/直连，返回第一个能绕过 WAF 的代理 URL；全部失败返回 None"""
-    proxies = parse_proxies(PROXY_ENV)
-    attempts = [(p, p.split("@")[-1]) for p in proxies] + [("", "直连（无代理）")]
-
-    for proxy_url, label in attempts:
-        log.info("尝试连接方式: %s", label)
-        s = create_session(proxy_url)
-        try:
-            data = get_json(s.get(f"{BASE_URL}/api/status", timeout=25))
-            if data and data.get("success"):
-                log.info("✅ 连接可用：%s（已绕过 WAF）", label)
-                return proxy_url
-        except Exception as e:
-            log.warning("连接 [%s] 异常: %s", label, e)
-        log.warning("❌ 连接 [%s] 不可用，尝试下一个", label)
-    return None
-
-def do_login(session: requests.Session, username: str, password: str) -> tuple:
-    """
-    登录（= 触发签到）。
-    成功返回 (user_data, "")；失败返回 ({}, error_message)
-    """
+def do_login(session: requests.Session, username: str, password: str) -> bool:
+    """登录，成功后 access_token / Cookie 自动存入 session"""
+    payload = {"username": username, "password": password}
     try:
-        resp = session.post(
-            f"{BASE_URL}/api/user/login",
-            json={"username": username, "password": password},
-            timeout=25,
-        )
-        data = get_json(resp)
-        if not data or not data.get("success"):
-            msg = data.get("message", "未知错误") if data else "响应解析失败"
-            # 常见错误提示
-            if "用户名或密码" in msg or "invalid" in msg.lower():
-                msg = "用户名或密码错误"
-            elif "未激活" in msg or "not activated" in msg.lower():
-                msg = "账号未激活"
-            elif "频率" in msg or "频率" in msg.lower():
-                msg = "登录频率受限，请稍后重试"
-            return {}, msg
-
-        user = data.get("data", {})
-        user_id = user.get("id", "")
-        access_token = user.get("access_token", "")
-
-        # 用 access_token 查询最新余额
-        quota = 0
-        if access_token:
-            try:
-                headers = {
-                    "Authorization": access_token,
-                    "New-API-User": str(user_id),
-                }
-                self_data = get_json(
-                    session.get(
-                        f"{BASE_URL}/api/user/self",
-                        headers=headers,
-                        timeout=25,
-                    )
-                )
-                if self_data and self_data.get("success"):
-                    quota = self_data.get("data", {}).get("quota", 0)
-            except Exception as e:
-                log.warning("查询余额异常: %s", e)
-
-        return {
-            "id": user_id,
-            "username": user.get("username", username),
-            "access_token": access_token,
-            "quota": quota,
-            "checked_in": user.get("checked_in", False),
-        }, ""
-
+        data = get_json(session.post(f"{BASE_URL}/api/user/login", json=payload, timeout=25))
+        if not data:
+            return False
+        if data.get("success"):
+            log.info("登录成功: %s", mask(username))
+            return True
+        msg = data.get("message", "未知错误")
+        # 常见错误友好提示
+        if "用户名或密码" in msg or "invalid" in msg.lower():
+            msg = "用户名或密码错误"
+        elif "未激活" in msg or "not activated" in msg.lower():
+            msg = "账号未激活"
+        log.error("登录失败: %s", msg)
+        return False
     except requests.RequestException as e:
         log.error("登录请求异常: %s", e)
-        return {}, str(e)
+        return False
 
-def do_checkin_for_account(session: requests.Session, username: str, password: str) -> dict:
-    """单个账号登录（触发签到）+ 查余额，返回结果 dict 供汇总通知使用"""
-    user, err = do_login(session, username, password)
+def do_checkin(session: requests.Session) -> tuple:
+    """
+    执行签到，返回 (是否本次新签到, 状态描述)。
+    New-API 标准签到接口（QuantumNous/new-api）为 POST /api/user/checkin。
+    """
+    try:
+        data = get_json(
+            session.post(f"{BASE_URL}/api/user/checkin", json={}, timeout=25)
+        )
+        if not data:
+            return False, "签到接口异常"
+
+        msg = data.get("message", "")
+        if data.get("success"):
+            log.info("🎉 签到成功，额度已到账")
+            return True, "签到成功，额度已到账"
+        if "已经签到" in msg or "已签到" in msg:
+            log.info("✅ 今日已签到")
+            return False, "今日已签到"
+        log.warning("签到失败: %s", msg)
+        return False, f"签到失败：{msg or '未知错误'}"
+    except requests.RequestException as e:
+        log.error("签到请求异常: %s", e)
+        return False, "签到请求异常"
+
+def get_user_info(session: requests.Session) -> dict:
+    """获取用户信息（含 quota 等余额字段）"""
+    try:
+        data = get_json(session.get(f"{BASE_URL}/api/user/self", timeout=25))
+        if data and data.get("success"):
+            return data.get("data", {})
+        if data:
+            log.warning("获取用户信息失败: %s", data.get("message", ""))
+    except requests.RequestException as e:
+        log.error("获取用户信息异常: %s", e)
+    return {}
+
+# ---------------------------------------------------------------------------
+# 单账号流程
+# ---------------------------------------------------------------------------
+def process_account(username: str, password: str) -> dict:
+    """
+    处理单个账号的登录 + 签到 + 查额度
+    返回结果字典，供 notify 汇总使用
+    """
     result = {
-        "display": mask(username),
-        "checked_in": False,
+        "username": mask(username),
+        "success": False,
+        "new_signin": False,
+        "status": "",
+        "quota": 0,
         "balance_usd": 0.0,
-        "error": err,
     }
-    if not user:
+
+    session = create_session()
+
+    if not do_login(session, username, password):
+        result["status"] = "登录失败"
         return result
 
-    result["checked_in"] = bool(user.get("checked_in"))
-    result["balance_usd"] = quota_to_usd(user.get("quota", 0))
+    result["new_signin"], result["status"] = do_checkin(session)
+
+    # 查询最新余额
+    info = get_user_info(session)
+    if info:
+        result["success"] = True
+        result["username"] = mask(info.get("username") or username)
+        result["quota"] = info.get("quota", 0)
+        # New-API 标准：1 USD = 500000 quota
+        result["balance_usd"] = round((result["quota"] or 0) / 500000, 2)
+        log.info("当前余额: $%.2f（%d 硬币）", result["balance_usd"], result["quota"])
+    else:
+        result["status"] += "（额度查询失败）"
+
     return result
 
 # ---------------------------------------------------------------------------
@@ -230,45 +209,43 @@ def do_checkin_for_account(session: requests.Session, username: str, password: s
 def main():
     log.info("=" * 48)
     log.info("API456 每日签到脚本启动")
+    log.info("目标站点: %s", BASE_URL)
 
     accounts = parse_accounts(ACCOUNTS)
     if not accounts:
-        log.error("未配置账号信息：需 API456_ACCOUNTS（格式 user:pass，多账号逗号/换行分隔），脚本退出")
+        log.error("未配置 API456_ACCOUNTS（格式：每行 `user:pass`），脚本退出")
         sys.exit(1)
 
     log.info("共 %d 个账号待签到", len(accounts))
 
-    # 1. 选出能绕过 WAF 的连接
-    proxy_url = find_working_proxy()
-    if proxy_url is None:
-        log.error("所有连接方式均无法绕过 WAF，请检查 SOCKS5_PROXY，脚本退出")
-        sys.exit(1)
-
-    # 2. 逐账号签到（任一失败不中断，继续下一个）
     results = []
-    for username, password in accounts:
-        log.info("签到中: %s", mask(username))
-        session = create_session(proxy_url)  # 独立 session，避免 cookie 串扰
-        result = do_checkin_for_account(session, username, password)
-        results.append(result)
-        if result["error"]:
-            log.warning("❌ %s 登录失败: %s", mask(username), result["error"])
-        elif result["checked_in"]:
-            log.info("🎉 %s 签到成功，余额 $%.2f", mask(username), result["balance_usd"])
-        else:
-            log.info("✅ %s 今日已签到，余额 $%.2f", mask(username), result["balance_usd"])
+    for idx, (username, password) in enumerate(accounts, 1):
+        log.info("-" * 48)
+        log.info("[%d/%d] 处理账号: %s", idx, len(accounts), mask(username))
+        results.append(process_account(username, password))
 
-    # 3. 发送汇总通知
+    log.info("-" * 48)
+
+    # 发送 TG 汇总通知
+    notify_data = {
+        "date": bjt_date_str(),
+        "results": results,
+    }
     try:
-        from notify import send_combined_notification
-        send_combined_notification(results)
+        from notify import send_combined_notification  # type: ignore
+        send_combined_notification(notify_data)
     except ImportError as e:
         log.warning("无法导入 notify 模块: %s", e)
     except Exception as e:
         log.error("发送 TG 通知异常: %s", e)
 
-    log.info("签到流程完成")
+    ok_count = sum(1 for r in results if r["success"])
+    log.info("签到流程完成：成功 %d / 总计 %d", ok_count, len(results))
     log.info("=" * 48)
+
+    # 有任一账号失败时以非零码退出，便于 Actions 标红告警
+    if ok_count < len(results):
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
