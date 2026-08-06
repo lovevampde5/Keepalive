@@ -1,0 +1,36 @@
+name: API456 每日签到
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 📦 安装依赖
+        working-directory: ./api456
+        run: pip install -r requirements.txt
+
+      - name: ✅ 执行签到
+        working-directory: ./api456
+        env:
+          API456_ACCOUNTS: ${{ vars.API456_ACCOUNTS }}
+          API456_BASE_URL: ${{ vars.API456_BASE_URL }}
+          SOCKS5_PROXY: ${{ vars.SOCKS5_PROXY }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python checkin.py
