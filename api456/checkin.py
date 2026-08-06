@@ -31,9 +31,9 @@ from datetime import datetime, timezone, timedelta
 # ---------------------------------------------------------------------------
 # 配置（全部从环境变量读取）
 # ---------------------------------------------------------------------------
-BASE_URL = os.getenv("API456_BASE_URL", "https://api456.me")
-ACCOUNTS_RAW = os.getenv("API456_ACCOUNTS", "")
-PROXY_ENV = os.getenv("SOCKS5_PROXY", "")
+BASE_URL = os.getenv("API456_BASE_URL") or "https://api456.me"
+ACCOUNTS = os.getenv("API456_ACCOUNTS") or ""
+PROXY_ENV = os.getenv("SOCKS5_PROXY") or ""
 
 QUOTA_PER_UNIT = 500000  # New-API 配额转 USD
 BJT = timezone(timedelta(hours=8))
