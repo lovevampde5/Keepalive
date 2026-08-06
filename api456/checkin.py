@@ -105,36 +105,40 @@ def create_session() -> requests.Session:
     })
     return s
 
-def do_login(session: requests.Session, username: str, password: str) -> bool:
-    """登录，成功后 access_token / Cookie 自动存入 session"""
+def do_login(session: requests.Session, username: str, password: str):
+    """
+    登录，成功后 access_token / Cookie 自动存入 session。
+    成功返回用户 dict（含 id，用于 New-Api-User 请求头）；失败返回 {}。
+    """
     payload = {"username": username, "password": password}
     try:
         data = get_json(session.post(f"{BASE_URL}/api/user/login", json=payload, timeout=25))
-        if not data:
-            return False
-        if data.get("success"):
+        if data and data.get("success"):
             log.info("登录成功: %s", mask(username))
-            return True
-        msg = data.get("message", "未知错误")
+            return data.get("data", {})
+        msg = data.get("message", "未知错误") if data else "响应为空"
         # 常见错误友好提示
         if "用户名或密码" in msg or "invalid" in msg.lower():
             msg = "用户名或密码错误"
         elif "未激活" in msg or "not activated" in msg.lower():
             msg = "账号未激活"
         log.error("登录失败: %s", msg)
-        return False
+        return {}
     except requests.RequestException as e:
         log.error("登录请求异常: %s", e)
-        return False
+        return {}
 
-def do_checkin(session: requests.Session) -> tuple:
+def do_checkin(session: requests.Session, user_id: str) -> tuple:
     """
     执行签到，返回 (是否本次新签到, 状态描述)。
-    New-API 标准签到接口（QuantumNous/new-api）为 POST /api/user/checkin。
+    New-API 标准签到接口需要 New-Api-User 请求头。
     """
     try:
+        headers = {"New-Api-User": str(user_id)}
         data = get_json(
-            session.post(f"{BASE_URL}/api/user/checkin", json={}, timeout=25)
+            session.post(
+                f"{BASE_URL}/api/user/checkin", json={}, headers=headers, timeout=25
+            )
         )
         if not data:
             return False, "签到接口异常"
@@ -152,10 +156,13 @@ def do_checkin(session: requests.Session) -> tuple:
         log.error("签到请求异常: %s", e)
         return False, "签到请求异常"
 
-def get_user_info(session: requests.Session) -> dict:
+def get_user_info(session: requests.Session, user_id: str) -> dict:
     """获取用户信息（含 quota 等余额字段）"""
     try:
-        data = get_json(session.get(f"{BASE_URL}/api/user/self", timeout=25))
+        headers = {"New-Api-User": str(user_id)}
+        data = get_json(
+            session.get(f"{BASE_URL}/api/user/self", headers=headers, timeout=25)
+        )
         if data and data.get("success"):
             return data.get("data", {})
         if data:
@@ -183,14 +190,17 @@ def process_account(username: str, password: str) -> dict:
 
     session = create_session()
 
-    if not do_login(session, username, password):
+    user = do_login(session, username, password)
+    if not user:
         result["status"] = "登录失败"
         return result
 
-    result["new_signin"], result["status"] = do_checkin(session)
+    user_id = str(user.get("id", ""))
+
+    result["new_signin"], result["status"] = do_checkin(session, user_id)
 
     # 查询最新余额
-    info = get_user_info(session)
+    info = get_user_info(session, user_id)
     if info:
         result["success"] = True
         result["username"] = mask(info.get("username") or username)
