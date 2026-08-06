@@ -231,7 +231,7 @@ def main():
     log.info("=" * 48)
     log.info("API456 每日签到脚本启动")
 
-    accounts = parse_accounts(ACCOUNTS_RAW)
+    accounts = parse_accounts(ACCOUNTS)
     if not accounts:
         log.error("未配置账号信息：需 API456_ACCOUNTS（格式 user:pass，多账号逗号/换行分隔），脚本退出")
         sys.exit(1)
