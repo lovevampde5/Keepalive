@@ -1,0 +1,76 @@
+name: nuwax-auto-login
+
+on:
+  schedule:
+    - cron: '0 16 * * *'   # 每天 UTC 16:00（北京时间 00:00）
+  workflow_dispatch:        # 支持手动触发
+
+jobs:
+  auto-login:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./nuwax-auto-login
+    permissions:
+      contents: read
+      actions: write        # 清理历史 artifact 需要
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'npm'
+          cache-dependency-path: nuwax-auto-login/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+          
+      - name: 安装 Playwright Chromium
+        run: npx playwright install chromium
+          
+      - name: 执行自动登录
+        env:
+          NUWAX_PHONE: ${{ secrets.NUWAX_PHONE }}
+          NUWAX_PASSWORD: ${{ secrets.NUWAX_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          NUWAX_COOKIE: ${{ vars.NUWAX_COOKIE }}
+        run: node src/index.js
+          
+      - name: 清理历史截图 Artifacts
+        if: always()
+        continue-on-error: true      # 清理失败不影响登录结果判定
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 只清历史遗留，本次 run 的截图在下一步才上传，不受影响
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              { owner, repo, name: 'debug-screenshots', per_page: 100 }
+            );
+            const stale = artifacts.filter(a => !a.expired);
+            if (stale.length === 0) {
+              core.info('无历史 artifact，跳过');
+              return;
+            }
+            for (const a of stale) {
+              try {
+                await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id });
+                core.info(`已删除 ${a.id}（${a.created_at}）`);
+              } catch (err) {
+                core.warning(`删除 ${a.id} 失败：${err.message}`);
+              }
+            }
+            core.info(`清理完成，共处理 ${stale.length} 个`);
+
+      - name: 上传失败截图（调试用）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: nuwax-auto-login/screenshots/   # uses 步骤不受 working-directory 影响，需写全路径
+          retention-days: 3
